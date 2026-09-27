@@ -1,0 +1,37 @@
+@import "tailwindcss";
+
+/*
+ * OMS design tokens, from the project's color scheme reference.
+ * Always dark-mode — this isn't a light/dark toggle, it's the app's
+ * one visual identity, so tokens are fixed rather than theme-switched.
+ */
+:root {
+  --oms-bg: #0a0e26;          /* main background */
+  --oms-surface: #2b2e52;      /* cards, primary surfaces */
+  --oms-surface-alt: #1a234a;  /* secondary surfaces, inputs, borders */
+  --oms-accent: #df8a17;       /* primary accent, buttons, active states */
+  --oms-accent-hover: #e9991c; /* hover / brighter accent */
+  --oms-text: #ffffff;
+  --oms-text-muted: #b7bcd9;   /* derived: readable secondary text on navy */
+  --oms-danger: #f26262;       /* derived: error states, not in the source palette */
+  --oms-success: #4ade80;      /* derived: success states, not in the source palette */
+}
+
+@theme inline {
+  --color-oms-bg: var(--oms-bg);
+  --color-oms-surface: var(--oms-surface);
+  --color-oms-surface-alt: var(--oms-surface-alt);
+  --color-oms-accent: var(--oms-accent);
+  --color-oms-accent-hover: var(--oms-accent-hover);
+  --color-oms-text: var(--oms-text);
+  --color-oms-text-muted: var(--oms-text-muted);
+  --color-oms-danger: var(--oms-danger);
+  --color-oms-success: var(--oms-success);
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+body {
+  background: var(--oms-bg);
+  color: var(--oms-text);
+}

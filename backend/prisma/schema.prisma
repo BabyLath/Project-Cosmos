@@ -1,0 +1,61 @@
+// Prisma schema for the OMS authentication module.
+// Only auth-related models live here. Other OMS modules (member
+// management, finance, etc.) will add their own models and can
+// reference User by id.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN
+  OFFICER
+  MEMBER
+}
+
+model User {
+  id           String    @id @default(cuid())
+  fullName     String
+  email        String    @unique
+  passwordHash String
+  role         Role      @default(MEMBER)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  sessions     Session[]
+  resetTokens  PasswordResetToken[]
+
+  @@index([email])
+}
+
+// One row per active login. The row's id is the value stored in the
+// user's session cookie, so deleting a row logs that session out
+// immediately (used for logout and for password-reset invalidation).
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+// tokenHash is sha256(rawToken). Only the raw token is emailed to the
+// user; the database never sees it, so a DB leak alone can't be used
+// to reset passwords.
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
