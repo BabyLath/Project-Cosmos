@@ -23,7 +23,11 @@ vi.mock("../src/services/auth.service", async () => {
     resetPassword: vi.fn(),
   };
 });
-vi.mock("../src/services/email.service", () => ({ sendPasswordResetEmail: vi.fn() }));
+vi.mock("../src/services/member.service", () => ({}));
+vi.mock("../src/services/email.service", () => ({
+  sendPasswordResetEmail: vi.fn(),
+  sendMemberInviteEmail: vi.fn(),
+}));
 
 import { app } from "../src/server";
 import * as authService from "../src/services/auth.service";
@@ -58,6 +62,17 @@ describe("POST /api/auth/login", () => {
 
     expect(res.status).toBe(401);
     expect(res.body.error).toBe("Invalid email or password");
+  });
+
+  it("returns 403 for a deactivated account", async () => {
+    mockedAuthService.login.mockRejectedValue(new authService.AccountInactiveError());
+
+    const res = await request(app)
+      .post("/api/auth/login")
+      .set(csrf)
+      .send({ email: "user@example.org", password: "correct1" });
+
+    expect(res.status).toBe(403);
   });
 
   it("sets a session cookie and returns the user on success", async () => {
@@ -96,6 +111,7 @@ describe("GET /api/auth/me", () => {
       email: "user@example.org",
       fullName: "Test User",
       role: "MEMBER",
+      status: "ACTIVE",
     } as never);
 
     const res = await request(app).get("/api/auth/me").set("Cookie", "oms_session=good-session-id");

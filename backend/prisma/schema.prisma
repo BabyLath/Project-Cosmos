@@ -1,6 +1,6 @@
-// Prisma schema for the OMS authentication module.
-// Only auth-related models live here. Other OMS modules (member
-// management, finance, etc.) will add their own models and can
+// Prisma schema for the OMS authentication and member-management modules.
+// Only auth- and member-related models live here. Other OMS modules
+// (finance, documents, etc.) will add their own models and can
 // reference User by id.
 
 generator client {
@@ -17,24 +17,36 @@ enum Role {
   MEMBER
 }
 
+// ACTIVE accounts can log in. INACTIVE accounts are soft-deactivated:
+// the row is kept (other OMS modules may reference the user by id),
+// but login is rejected and all existing sessions are revoked.
+enum AccountStatus {
+  ACTIVE
+  INACTIVE
+}
+
 model User {
-  id           String    @id @default(cuid())
+  id           String        @id @default(cuid())
   fullName     String
-  email        String    @unique
+  email        String        @unique
   passwordHash String
-  role         Role      @default(MEMBER)
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  role         Role          @default(MEMBER)
+  status       AccountStatus @default(ACTIVE)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
 
   sessions     Session[]
   resetTokens  PasswordResetToken[]
 
   @@index([email])
+  @@index([status])
+  @@index([role])
 }
 
 // One row per active login. The row's id is the value stored in the
 // user's session cookie, so deleting a row logs that session out
-// immediately (used for logout and for password-reset invalidation).
+// immediately (used for logout, password-reset invalidation, and
+// account deactivation).
 model Session {
   id        String   @id @default(cuid())
   userId    String
@@ -47,7 +59,8 @@ model Session {
 
 // tokenHash is sha256(rawToken). Only the raw token is emailed to the
 // user; the database never sees it, so a DB leak alone can't be used
-// to reset passwords.
+// to reset passwords. Also reused for member-invitation "set your
+// password" links (see auth.service.createPasswordResetToken).
 model PasswordResetToken {
   id        String    @id @default(cuid())
   userId    String

@@ -1,6 +1,6 @@
-# OMS Authentication Module
+# OMS: Authentication and Member Management
 
-Login and session-management module for the Organization Management System. Built as a foundation other OMS modules (member management, finance, documents, announcements, attendance, events) will plug into.
+Login/session module plus member management for the Organization Management System. Other OMS modules (finance, documents, announcements, attendance, events) will plug into this foundation.
 
 ## Stack
 
@@ -12,15 +12,13 @@ Login and session-management module for the Organization Management System. Buil
 ## Project structure
 
 ```
-backend/    Express API — auth logic, database, sessions
-frontend/   Next.js app — login/reset UI, protected dashboard placeholder
+backend/    Express API: auth, members, database, sessions
+frontend/   Next.js app: login/reset UI, dashboard, member management UI
 ```
 
 ## Setup
 
 ### 1. Database
-
-You need a running PostgreSQL instance. Locally, the simplest option is Docker:
 
 ```bash
 docker run --name oms-postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=oms -p 5432:5432 -d postgres:16
@@ -33,10 +31,12 @@ cd backend
 cp .env.example .env       # edit DATABASE_URL and SEED_ADMIN_* if needed
 npm install
 npx prisma generate
-npx prisma migrate dev --name init
+npx prisma migrate dev     # applies init + add_member_management migrations
 npm run seed                # creates the first admin account from .env
 npm run dev                 # http://localhost:4000
 ```
+
+Upgrading from Phase 1: just run `npx prisma migrate dev`. Existing users get `status = ACTIVE`.
 
 ### 3. Frontend
 
@@ -47,56 +47,82 @@ npm install
 npm run dev                  # http://localhost:3000
 ```
 
-Visit `http://localhost:3000` — you'll land on `/login`. Sign in with the `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` from your backend `.env`.
-
-## Environment variables
-
-See `backend/.env.example` and `frontend/.env.example` for the full list, each with an inline comment explaining what it's for. Nothing needs a value beyond what's already documented there except `DATABASE_URL` and, if you want real password-reset emails, the `SMTP_*` vars — without them the reset link is logged to the backend console instead (clearly marked as a dev stub, not a silent no-op).
+Sign in with the `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` from your backend `.env`.
 
 ## Authentication flow
 
-1. **Login**: credentials verified with Argon2id, a `Session` row created in Postgres, its id set as an httpOnly cookie (`SameSite=Lax`, `Secure` in production).
-2. **Every request to a protected endpoint**: the backend looks up the session by cookie value and rejects if missing or expired. This is the actual security boundary.
-3. **Frontend route guard** (`frontend/proxy.ts`, Next 16's renamed `middleware.ts`): checks only that the cookie *exists*, and redirects to `/login` if not — pure UX, not security, since it can't validate against the database at the edge.
-4. **Protected pages** (e.g. `/dashboard`) independently call the backend's `/api/auth/me` server-side before rendering, so a forged or expired cookie is caught even if the edge check is bypassed.
+1. **Login**: credentials verified with Argon2id, a `Session` row created, its id set as an httpOnly cookie (`SameSite=Lax`, `Secure` in production). Inactive accounts are rejected after the password check (403), so account status is never revealed to someone who does not know the password.
+2. **Protected endpoints**: `requireAuth` looks up the session by cookie and rejects if missing, expired, or belonging to an inactive user. This is the security boundary.
+3. **Frontend route guard** (`frontend/proxy.ts`): only checks the cookie exists (UX, not security). Guards `/dashboard` and `/members`.
+4. **Protected pages** call `/api/auth/me` server-side before rendering. Member pages also redirect plain `MEMBER` users to `/dashboard`.
 5. **Logout**: deletes the `Session` row and clears the cookie.
-6. **Forgot/reset password**: a random token is emailed (or logged, in dev); only its SHA-256 hash is stored. Reset invalidates the token and logs out every existing session for that user.
+6. **Forgot/reset password**: random token emailed (or logged in dev); only its SHA-256 hash is stored. Reset revokes all sessions for that user.
 
 ### Why sessions, not JWT
 
-Revocation. If you kick a member, force a logout after a password reset, or add role-based permissions later, a JWT needs a denylist to enforce that — which just reimplements a session store, worse. DB-backed sessions revoke instantly by deleting a row, and never put anything beyond a random ID in the browser. The cost is a DB lookup per request, which is a non-issue at OMS scale and much easier for a student team to reason about than token expiry/refresh logic.
+Revocation. Deactivating a member, forcing logout after a password reset, or role changes all take effect instantly by deleting rows. A JWT would need a denylist, which is a session store with extra steps.
 
-## Database schema
+## Member management
 
-Three tables: `User`, `Session`, `PasswordResetToken`. See `backend/prisma/schema.prisma` for the full definitions and inline comments on the security reasoning (e.g. why `PasswordResetToken.tokenHash` and not the raw token).
+### Architecture
 
-`User.role` is an enum (`ADMIN` / `OFFICER` / `MEMBER`) already in place so role-based access control can be added to `requireAuth` later without a schema migration.
+`routes/member.routes.ts` -> `controllers/member.controller.ts` -> `services/member.service.ts` -> Prisma. Validation lives in `validators/member.validators.ts` (zod). `requireRole(...)` in `auth.middleware.ts` is the reusable role guard. The `User` model remains the single identity model.
 
-## Registration
+Creating a member does not use an admin-chosen password. A random, never-revealed password is stored, then the existing password-reset token mechanism issues a "set your password" link (`sendMemberInviteEmail`). Without SMTP configured, the link is logged to the backend console.
 
-No public `/register` endpoint, per project scope. The first admin account is created via `backend/prisma/seed.ts` from `SEED_ADMIN_*` env vars. Subsequent accounts are expected to come from a future member-management module's admin-only user-creation flow — `requireAuth` plus a role check is all that flow will need to reuse.
+### API
+
+All endpoints require an authenticated ADMIN or OFFICER. State-changing requests also need the `X-Requested-With: oms-frontend` header.
+
+| Method | Path | Who | Notes |
+|---|---|---|---|
+| GET | `/api/members` | ADMIN, OFFICER | Query: `search`, `role`, `status`, `page`, `pageSize` (max 100) |
+| GET | `/api/members/:id` | ADMIN, OFFICER | 404 if not found |
+| POST | `/api/members` | ADMIN, OFFICER | Body: `fullName`, `email`, `role`. 409 on duplicate email |
+| PATCH | `/api/members/:id` | ADMIN, OFFICER | Partial: `fullName`, `email`, `role` |
+| PATCH | `/api/members/:id/status` | ADMIN only | Body: `status` (`ACTIVE`/`INACTIVE`) |
+
+Responses never include password hashes, session ids, or reset tokens. There is no DELETE endpoint.
+
+### Permissions
+
+| Action | ADMIN | OFFICER | MEMBER |
+|---|---|---|---|
+| View list / details | yes | yes | no |
+| Create member | any role | MEMBER/OFFICER only | no |
+| Edit name/email | yes | yes, except ADMIN accounts | no |
+| Change role | yes (not own) | MEMBER<->OFFICER only, never ADMIN accounts, never own | no |
+| Deactivate/reactivate | yes (not self) | no | no |
+
+Assumptions: officers may create and edit non-admin accounts; deactivation is admin-only; nobody can change their own role or deactivate themselves (prevents escalation and lockout).
+
+### Database changes
+
+Migration `20260928010000_add_member_management`: adds enum `AccountStatus` (`ACTIVE`, `INACTIVE`), `User.status` (default `ACTIVE`), and indexes on `User.status` and `User.role`. Deactivation sets `INACTIVE` and deletes all of the user's sessions in one transaction.
 
 ## Testing
 
 ```bash
 cd backend
-npm test              # 30 tests: password hashing, session/token logic, HTTP-level route behavior
-npm run typecheck
+npm test              # 66 tests
 ```
 
 ```bash
 cd frontend
-npx tsc --noEmit
+npx tsc --noEmit      # only error is LayoutProps, a global that `next build` generates
 npx eslint .
-npm run build          # full production build
+npm run build
 ```
 
-Backend tests mock Prisma directly, so they don't require a running database — they test business logic (credential verification, session creation/expiry, token hashing/expiry/single-use, CSRF header enforcement, generic error messages) and HTTP behavior (status codes, cookie handling, response shape) in isolation. They do **not** cover a real Postgres round trip; run `npx prisma migrate dev` against a real database and exercise the endpoints with something like `curl` or Postman for that layer once your environment can reach Prisma's binary host and a database.
+Backend tests mock Prisma (and the Prisma error class in `member.service.test.ts`), so they need no database or generated client. They do not cover a real Postgres round trip, including the `insensitive` search, the unique-email constraint, and the deactivation transaction. Verify those against a real database.
 
-## Known limitations / next steps
+## Known limitations
 
-- **No rate-limit persistence.** The login/forgot-password limiter is in-memory and resets on server restart. Fine for a single-instance student deployment; swap for a Redis-backed limiter (`rate-limiter-flexible`) before running multiple backend instances behind a load balancer.
-- **No email verification on account creation.** Since accounts are admin-created, this wasn't in scope — add it if self-registration is introduced later.
-- **CSRF protection is header-based, not token-based.** Sufficient given `SameSite=Lax` cookies and a custom header requirement, but if the frontend and backend end up on different eTLD+1 domains in production, revisit this (`SameSite=None` would need real CSRF tokens).
-- **RBAC middleware doesn't exist yet** — only `requireAuth` (authenticated or not). The `role` field is in the schema so adding a `requireRole("ADMIN")` middleware is additive, not a rewrite.
-- **No database-backed integration tests were run in this build environment** — see the Testing section above. Everything else (typecheck, lint, unit tests, production build) was actually executed and passed; this is the one layer that genuinely needs your own machine or CI.
+- **Untested against a real database.** See above.
+- **In-memory rate limiter** (login/forgot-password) resets on restart; swap for Redis before running multiple instances.
+- **Email delivery is a console stub** until `nodemailer` is wired into `email.service.ts` (reset and invite emails).
+- **Invite links are not resendable** from the UI. An admin can ask the member to use "Forgot password".
+- **Last-admin protection is not implemented.** An admin can demote another admin, so a team could end up with no admins. Add a check when this matters.
+- **Duplicated fetch helper** in `lib/api/members.ts` and `lib/api/auth.ts`; consolidate later.
+- **CSRF protection is header-based**; revisit if frontend and backend end up on different eTLD+1 domains.
+- **Only `requireAuth` and `requireRole` exist** for authorization; no permission framework by design.

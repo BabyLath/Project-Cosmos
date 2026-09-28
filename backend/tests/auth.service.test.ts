@@ -21,6 +21,7 @@ import {
   resetPassword,
   InvalidCredentialsError,
   InvalidResetTokenError,
+  AccountInactiveError,
 } from "../src/services/auth.service";
 
 const mockedPrisma = vi.mocked(prisma, true);
@@ -52,6 +53,7 @@ describe("login", () => {
       passwordHash,
       fullName: "Test User",
       role: "MEMBER",
+      status: "ACTIVE",
     } as never);
 
     await expect(login("user@example.org", "wrong-password1")).rejects.toThrow(InvalidCredentialsError);
@@ -65,6 +67,7 @@ describe("login", () => {
       passwordHash,
       fullName: "Test User",
       role: "MEMBER",
+      status: "ACTIVE",
     } as never);
     mockedPrisma.session.create.mockResolvedValue({ id: "s1", userId: "u1" } as never);
 
@@ -73,6 +76,37 @@ describe("login", () => {
     expect(mockedPrisma.session.create).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ userId: "u1" }) })
     );
+  });
+
+  it("throws AccountInactiveError for a deactivated account with correct credentials", async () => {
+    const passwordHash = await hashPassword("correct-password1");
+    mockedPrisma.user.findUnique.mockResolvedValue({
+      id: "u1",
+      email: "user@example.org",
+      passwordHash,
+      fullName: "Test User",
+      role: "MEMBER",
+      status: "INACTIVE",
+    } as never);
+
+    await expect(login("user@example.org", "correct-password1")).rejects.toThrow(AccountInactiveError);
+    // No session should have been created for a deactivated account.
+    expect(mockedPrisma.session.create).not.toHaveBeenCalled();
+  });
+
+  it("throws InvalidCredentialsError (not AccountInactiveError) for a deactivated account with the wrong password", async () => {
+    const passwordHash = await hashPassword("correct-password1");
+    mockedPrisma.user.findUnique.mockResolvedValue({
+      id: "u1",
+      email: "user@example.org",
+      passwordHash,
+      fullName: "Test User",
+      role: "MEMBER",
+      status: "INACTIVE",
+    } as never);
+
+    // Status should never be revealed before the password is verified.
+    await expect(login("user@example.org", "wrong-password1")).rejects.toThrow(InvalidCredentialsError);
   });
 });
 

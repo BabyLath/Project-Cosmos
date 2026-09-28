@@ -37,6 +37,9 @@ export async function loginHandler(req: Request, res: Response) {
       // Deliberately vague: does not say which of email/password was wrong.
       return res.status(401).json({ error: "Invalid email or password" });
     }
+    if (err instanceof authService.AccountInactiveError) {
+      return res.status(403).json({ error: "This account has been deactivated. Contact an administrator." });
+    }
     throw err;
   }
 }

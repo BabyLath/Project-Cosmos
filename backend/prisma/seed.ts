@@ -36,6 +36,7 @@ async function main() {
       email: env.SEED_ADMIN_EMAIL,
       passwordHash,
       role: "ADMIN",
+      status: "ACTIVE",
     },
   });
 

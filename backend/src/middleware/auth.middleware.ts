@@ -20,7 +20,7 @@ declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {
     interface Request {
-      user?: { id: string; email: string; fullName: string; role: string };
+      user?: { id: string; email: string; fullName: string; role: string; status: string };
       sessionId?: string;
     }
   }
@@ -45,9 +45,27 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     return res.status(401).json({ error: "Session expired" });
   }
 
-  req.user = { id: user.id, email: user.email, fullName: user.fullName, role: user.role };
+  req.user = { id: user.id, email: user.email, fullName: user.fullName, role: user.role, status: user.status };
   req.sessionId = sessionId;
   next();
+}
+
+/**
+ * Role-gate for member-management (and future) endpoints. Must run
+ * after requireAuth. Never trusts anything the client sends — the
+ * role comes from the session row looked up in requireAuth, not from
+ * the request body or a header.
+ */
+export function requireRole(...roles: Array<"ADMIN" | "OFFICER" | "MEMBER">) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (!req.user) {
+      return res.status(401).json({ error: "Not authenticated" });
+    }
+    if (!roles.includes(req.user.role as "ADMIN" | "OFFICER" | "MEMBER")) {
+      return res.status(403).json({ error: "You do not have permission to perform this action." });
+    }
+    next();
+  };
 }
 
 /**
